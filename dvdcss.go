@@ -1,8 +1,11 @@
 package godvdcss
 
+import "os"
+
 type Dvdcss_s struct {
 	psz_device string
 	i_fd       uintptr
+	fd         *os.File
 	i_pos      int64
 
 	i_method    dvdcss_method
@@ -23,3 +26,16 @@ const (
 	DVDCSS_METHOD_DISC
 	DVDCSS_METHOD_TITLE
 )
+
+// func (s *Dvdcss_s)
+
+func (s *Dvdcss_s) Close() error {
+	if s.fd != nil {
+		return s.fd.Close()
+	}
+	return nil
+}
+
+func (s *Dvdcss_s) IsScrambled() bool {
+	return s.b_scrambled
+}
