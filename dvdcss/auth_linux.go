@@ -97,7 +97,7 @@ func cryptKey(keyType, variant int, challenge [10]byte) Key {
 	return result
 }
 
-func authenticate(fd int) (int, Key, error) {
+func authenticate(fd uintptr) (int, Key, error) {
 	agid, err := reportAgid(fd, 0)
 	for i := 0; err != nil && i < 4; i++ {
 		agid = i

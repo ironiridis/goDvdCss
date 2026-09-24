@@ -14,7 +14,7 @@ const (
 )
 
 type DVD struct {
-	fd         *int
+	fd         *uintptr
 	stream     io.ReadSeeker
 	position   int64
 	agid       int
@@ -39,7 +39,7 @@ func Open(path string) (*DVD, error) {
 	if err != nil {
 		return nil, err
 	}
-	fd := int(file.Fd())
+	fd := file.Fd()
 	dvd := &DVD{fd: &fd, stream: file, scrambled: scrambleUnknown}
 	dvd.detectScrambled()
 	return dvd, nil
@@ -47,6 +47,15 @@ func Open(path string) (*DVD, error) {
 
 func New(stream io.ReadSeeker) *DVD {
 	return &DVD{stream: stream, scrambled: scrambleUnknown}
+}
+
+func (dvd *DVD) SetFd(fd uintptr) error {
+	if dvd.fd != nil {
+		return fmt.Errorf("dvdcss: file descriptor already set")
+	}
+	dvd.fd = &fd
+	dvd.detectScrambled()
+	return nil
 }
 
 func (dvd *DVD) Close() error {
