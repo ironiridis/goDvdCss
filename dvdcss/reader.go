@@ -153,12 +153,29 @@ func (dvd *DVD) detectScrambled() {
 	if dvd.scrambled != scrambleUnknown || dvd.fd == nil {
 		return
 	}
-	if copyright, err := readCopyright(*dvd.fd, 0); err == nil {
-		if copyright == 0 {
-			dvd.scrambled = scrambleClear
-		} else {
-			dvd.scrambled = scrambleEncrypted
-		}
+	copyright, err := readCopyright(*dvd.fd, 0)
+	if err != nil {
+		return
+	}
+	if copyright == 0 {
+		dvd.scrambled = scrambleClear
+	} else {
+		dvd.scrambled = scrambleEncrypted
+	}
+	dvd.checkRegion(copyright)
+}
+
+// checkRegion logs the drive's RPC status, matching dvdcss_test's warning
+// that a scrambled disc on a region-free RPC-II drive may fail to read.
+func (dvd *DVD) checkRegion(copyright int) {
+	typ, mask, rpc, err := reportRPC(*dvd.fd)
+	if err != nil {
+		slog.Debug("dvdcss: could not get RPC status, assuming RPC-I drive", "err", err)
+		return
+	}
+	slog.Debug("dvdcss: drive region status", "type", typ, "mask", mask, "rpcScheme", rpc)
+	if copyright != 0 && rpc == 1 && typ == 0 {
+		slog.Debug("dvdcss: scrambled disc on a region-free RPC-II drive: possible failure, but continuing anyway")
 	}
 }
 
@@ -250,10 +267,14 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 	}()
 
 	const readLimit = 4718592
+	// upstream gives up early on unscrambled titles rather than scanning
+	// the full readLimit range looking for a key that will never appear.
+	const noEncryptedLimit = 2000
 	var sector [BlockSize]byte
 	encryptedSeen := false
-	for scanned := range int64(readLimit) {
-		block := start + int64(scanned)
+	reads := int64(0)
+	for reads < readLimit {
+		block := start + reads
 		if _, err := dvd.stream.Seek(block*BlockSize, io.SeekStart); err != nil {
 			slog.Debug("dvdcss: seek failed while recovering title key", "block", block, "err", err)
 			return err
@@ -268,14 +289,18 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 		if sector[0] != 0 || sector[1] != 0 || sector[2] != 1 {
 			break
 		}
-		if sector[0x14]&0x30 == 0 || sector[0x11] == 0xbb || sector[0x11] == 0xbe || sector[0x11] == 0xbf {
-			continue
+		if sector[0x14]&0x30 != 0 && sector[0x11] != 0xbb && sector[0x11] != 0xbe && sector[0x11] != 0xbf {
+			encryptedSeen = true
+			if key, ok := attackPattern(sector[:]); ok {
+				dvd.titleKey = key
+				dvd.titleKnown = true
+				return nil
+			}
 		}
-		encryptedSeen = true
-		if key, ok := attackPattern(sector[:]); ok {
-			dvd.titleKey = key
-			dvd.titleKnown = true
-			return nil
+		reads++
+		if reads >= noEncryptedLimit && !encryptedSeen {
+			slog.Debug("dvdcss: no scrambled sectors found while cracking title key", "start", start, "scanned", reads)
+			break
 		}
 	}
 	if encryptedSeen {
