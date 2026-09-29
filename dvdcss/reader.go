@@ -3,6 +3,7 @@ package dvdcss
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 )
 
@@ -37,6 +38,7 @@ const (
 func Open(path string) (*DVD, error) {
 	file, err := os.Open(path)
 	if err != nil {
+		slog.Debug("dvdcss: failed to open path", "path", path, "err", err)
 		return nil, err
 	}
 	fd := file.Fd()
@@ -51,6 +53,7 @@ func New(stream io.ReadSeeker) *DVD {
 
 func (dvd *DVD) SetFd(fd uintptr) error {
 	if dvd.fd != nil {
+		slog.Debug("dvdcss: file descriptor already set", "fd", *dvd.fd)
 		return fmt.Errorf("dvdcss: file descriptor already set")
 	}
 	dvd.fd = &fd
@@ -64,6 +67,7 @@ func (dvd *DVD) Close() error {
 	}
 	closer, ok := dvd.stream.(io.Closer)
 	if !ok {
+		slog.Debug("dvdcss: opened stream cannot be closed", "streamType", fmt.Sprintf("%T", dvd.stream))
 		return fmt.Errorf("dvdcss: opened stream cannot be closed")
 	}
 	err := closer.Close()
@@ -74,9 +78,11 @@ func (dvd *DVD) Close() error {
 
 func (dvd *DVD) Seek(block int64, flags int) (int64, error) {
 	if block < 0 {
+		slog.Debug("dvdcss: negative block", "block", block)
 		return -1, fmt.Errorf("dvdcss: negative block %d", block)
 	}
 	if _, err := dvd.stream.Seek(block*BlockSize, io.SeekStart); err != nil {
+		slog.Debug("dvdcss: seek failed", "block", block, "err", err)
 		return -1, err
 	}
 	dvd.position = block
@@ -85,6 +91,7 @@ func (dvd *DVD) Seek(block int64, flags int) (int64, error) {
 	if flags&(SeekMPEG|SeekKey) != 0 {
 		if dvd.scrambled != scrambleClear && !dvd.tryTitleKey(block) {
 			if err := dvd.ensureTitleKey(block); err != nil {
+				slog.Debug("dvdcss: failed to ensure title key during seek", "block", block, "err", err)
 				return -1, err
 			}
 		}
@@ -98,20 +105,24 @@ func (dvd *DVD) tryTitleKey(block int64) bool {
 	}
 	if !dvd.discKnown {
 		if err := dvd.loadDiscKey(); err != nil {
+			slog.Debug("dvdcss: failed to load disc key", "block", block, "err", err)
 			return false
 		}
 	}
 	agid, busKey, err := authenticate(*dvd.fd)
 	if err != nil {
+		slog.Debug("dvdcss: authentication failed while fetching title key", "block", block, "err", err)
 		return false
 	}
 	dvd.agid, dvd.busKey = agid, busKey
 	key, err := readTitleKey(*dvd.fd, dvd.agid, int(block))
 	if err != nil {
+		slog.Debug("dvdcss: failed to read title key", "block", block, "err", err)
 		return false
 	}
 	asf, err := reportASF(*dvd.fd)
 	if err != nil || asf != 1 {
+		slog.Debug("dvdcss: authentication success flag check failed while fetching title key", "block", block, "asf", asf, "err", err)
 		_ = invalidateAGID(*dvd.fd, dvd.agid)
 		return false
 	}
@@ -119,6 +130,7 @@ func (dvd *DVD) tryTitleKey(block int64) bool {
 		key[i] ^= dvd.busKey[4-i]
 	}
 	if key.IsZero() {
+		slog.Debug("dvdcss: title key is zero", "block", block)
 		return false
 	}
 	dvd.titleKey = decryptTitleKey(dvd.discKey, key)
@@ -131,6 +143,7 @@ func (dvd *DVD) ensureTitleKeyForRead() error {
 		return nil
 	}
 	if err := dvd.ensureTitleKey(dvd.position); err != nil {
+		slog.Debug("dvdcss: failed to ensure title key for read", "position", dvd.position, "err", err)
 		return err
 	}
 	return nil
@@ -186,12 +199,14 @@ func (dvd *DVD) classifyBuffer(buffer []byte, blocks int) {
 
 func (dvd *DVD) Read(buffer []byte, blocks int, flags int) (int, error) {
 	if blocks < 0 || len(buffer) < blocks*BlockSize {
+		slog.Debug("dvdcss: buffer is too small", "blocks", blocks, "bufferLen", len(buffer))
 		return 0, fmt.Errorf("dvdcss: buffer is too small for %d blocks", blocks)
 	}
 	dvd.detectScrambled()
 	readStart := dvd.position
 	if dvd.scrambled == scrambleEncrypted && flags&ReadDecrypt != 0 && !dvd.titleKnown {
 		if err := dvd.ensureTitleKeyForRead(); err != nil {
+			slog.Debug("dvdcss: failed to ensure title key before read", "position", readStart, "err", err)
 			return 0, err
 		}
 	}
@@ -200,11 +215,13 @@ func (dvd *DVD) Read(buffer []byte, blocks int, flags int) (int, error) {
 	dvd.position += int64(readBlocks)
 	dvd.classifyBuffer(buffer, readBlocks)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		slog.Debug("dvdcss: read failed", "position", readStart, "blocks", blocks, "err", err)
 		return readBlocks, err
 	}
 	if dvd.scrambled == scrambleEncrypted && flags&ReadDecrypt != 0 && !dvd.titleKnown {
 		if !dvd.tryTitleKey(readStart) {
 			if err := dvd.ensureTitleKey(readStart); err != nil {
+				slog.Debug("dvdcss: failed to ensure title key after read", "position", readStart, "err", err)
 				return 0, err
 			}
 		}
@@ -213,6 +230,7 @@ func (dvd *DVD) Read(buffer []byte, blocks int, flags int) (int, error) {
 		for i := range readBlocks {
 			sector := buffer[i*BlockSize : (i+1)*BlockSize]
 			if err := unscramble(dvd.titleKey, sector); err != nil {
+				slog.Debug("dvdcss: failed to unscramble sector", "position", readStart, "index", i, "err", err)
 				return i, err
 			}
 			sector[0x14] &= 0x8f
@@ -237,12 +255,14 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 	for scanned := range int64(readLimit) {
 		block := start + int64(scanned)
 		if _, err := dvd.stream.Seek(block*BlockSize, io.SeekStart); err != nil {
+			slog.Debug("dvdcss: seek failed while recovering title key", "block", block, "err", err)
 			return err
 		}
 		if _, err := io.ReadFull(dvd.stream, sector[:]); err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				break
 			}
+			slog.Debug("dvdcss: read failed while recovering title key", "block", block, "err", err)
 			return err
 		}
 		if sector[0] != 0 || sector[1] != 0 || sector[2] != 1 {
@@ -259,6 +279,7 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 		}
 	}
 	if encryptedSeen {
+		slog.Debug("dvdcss: unable to recover title key", "start", start)
 		return fmt.Errorf("dvdcss: unable to recover title key")
 	}
 	dvd.titleKnown = true

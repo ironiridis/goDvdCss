@@ -3,6 +3,7 @@
 package dvdcss
 
 import (
+	"log/slog"
 	"syscall"
 	"unsafe"
 )
@@ -28,6 +29,7 @@ const (
 func linuxDVDIOCTL(fd uintptr, request uintptr, data unsafe.Pointer) error {
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, request, uintptr(data))
 	if errno != 0 {
+		slog.Debug("dvdcss: ioctl failed", "request", request, "errno", errno)
 		return errno
 	}
 	return nil
@@ -38,6 +40,7 @@ func readCopyright(fd uintptr, layer int) (int, error) {
 	data[0] = dvdStructCopyright
 	data[1] = byte(layer)
 	if err := linuxDVDIOCTL(fd, dvdReadStruct, unsafe.Pointer(&data[0])); err != nil {
+		slog.Debug("dvdcss: failed to read copyright structure", "layer", layer, "err", err)
 		return 0, err
 	}
 	return int(data[2]), nil
@@ -48,6 +51,7 @@ func readDiscKey(fd uintptr, agid int) ([]byte, error) {
 	data[0] = dvdStructDiscKey
 	data[1] = byte(agid & 3)
 	if err := linuxDVDIOCTL(fd, dvdReadStruct, unsafe.Pointer(&data[0])); err != nil {
+		slog.Debug("dvdcss: failed to read disc key structure", "agid", agid, "err", err)
 		return nil, err
 	}
 	key := make([]byte, 2048)
@@ -64,6 +68,7 @@ func reportAgid(fd uintptr, agid int) (int, error) {
 	var data [16]byte
 	data[1] = byte(agid & 3)
 	if err := authRequest(fd, dvdLUSendAGID, &data); err != nil {
+		slog.Debug("dvdcss: failed to report AGID", "agid", agid, "err", err)
 		return 0, err
 	}
 	return int(data[1] & 3), nil
@@ -80,6 +85,7 @@ func reportChallenge(fd uintptr, agid int) ([10]byte, error) {
 	var data [16]byte
 	data[1] = byte(agid & 3)
 	if err := authRequest(fd, dvdLUSendChallenge, &data); err != nil {
+		slog.Debug("dvdcss: failed to report challenge", "agid", agid, "err", err)
 		return [10]byte{}, err
 	}
 	var challenge [10]byte
@@ -91,6 +97,7 @@ func reportKey1(fd uintptr, agid int) (Key, error) {
 	var data [16]byte
 	data[1] = byte(agid & 3)
 	if err := authRequest(fd, dvdLUSendKey1, &data); err != nil {
+		slog.Debug("dvdcss: failed to report key1", "agid", agid, "err", err)
 		return Key{}, err
 	}
 	var key Key
@@ -108,6 +115,7 @@ func sendKey2(fd uintptr, agid int, key Key) error {
 func reportASF(fd uintptr) (int, error) {
 	var data [16]byte
 	if err := authRequest(fd, dvdLUSendASF, &data); err != nil {
+		slog.Debug("dvdcss: failed to report authentication success flag", "err", err)
 		return 0, err
 	}
 	return int(data[1] & 1), nil
@@ -118,6 +126,7 @@ func readTitleKey(fd uintptr, agid, block int) (Key, error) {
 	data[1] = byte(agid & 3)
 	*(*int32)(unsafe.Pointer(&data[8])) = int32(block)
 	if err := authRequest(fd, dvdLUSendTitleKey, &data); err != nil {
+		slog.Debug("dvdcss: failed to report title key", "agid", agid, "block", block, "err", err)
 		return Key{}, err
 	}
 	var key Key
@@ -134,6 +143,7 @@ func invalidateAGID(fd uintptr, agid int) error {
 func reportRPC(fd uintptr) (int, int, int, error) {
 	var data [16]byte
 	if err := authRequest(fd, dvdLUSendRPCState, &data); err != nil {
+		slog.Debug("dvdcss: failed to report RPC state", "err", err)
 		return 0, 0, 0, err
 	}
 	return int(data[0] & 3), int(data[1]), int(data[2]), nil

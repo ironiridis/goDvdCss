@@ -1,6 +1,9 @@
 package dvdcss
 
-import "errors"
+import (
+	"errors"
+	"log/slog"
+)
 
 const (
 	BlockSize = 2048
@@ -53,6 +56,7 @@ func decryptTitleKey(discKey, encrypted Key) Key { return decryptKey(0xff, discK
 
 func decryptDiscKey(encrypted []byte) (Key, error) {
 	if len(encrypted) < 5*409 {
+		slog.Debug("dvdcss: disc key structure is too short", "length", len(encrypted))
 		return Key{}, errors.New("dvdcss: disc key structure is too short")
 	}
 	for _, playerKey := range playerKeys {
@@ -64,6 +68,7 @@ func decryptDiscKey(encrypted []byte) (Key, error) {
 			}
 		}
 	}
+	slog.Debug("dvdcss: no player key decrypted the disc key", "playerKeyCount", len(playerKeys))
 	return Key{}, errors.New("dvdcss: no player key decrypted the disc key")
 }
 
@@ -71,6 +76,7 @@ func decryptDiscKey(encrypted []byte) (Key, error) {
 // their known plaintext, using the sector seed at offset 0x54.
 func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int, error) {
 	if start < 0 || start > 0xffff || len(crypted) < 10 || len(decrypted) < 10 || len(sectorSeed) < KeySize {
+		slog.Debug("dvdcss: invalid title-key recovery input", "start", start, "cryptedLen", len(crypted), "decryptedLen", len(decrypted), "sectorSeedLen", len(sectorSeed))
 		return Key{}, -1, errors.New("dvdcss: invalid title-key recovery input")
 	}
 	var buffer [10]byte
@@ -140,11 +146,13 @@ func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int
 			}
 		}
 	}
+	slog.Debug("dvdcss: title-key recovery failed", "start", start)
 	return Key{}, -1, errors.New("dvdcss: title-key recovery failed")
 }
 
 func unscramble(key Key, sector []byte) error {
 	if len(sector) < BlockSize {
+		slog.Debug("dvdcss: sector is shorter than 2048 bytes", "length", len(sector))
 		return errors.New("dvdcss: sector is shorter than 2048 bytes")
 	}
 	if sector[0x14]&0x30 == 0 {
