@@ -200,8 +200,12 @@ func (dvd *DVD) loadDiscKey() error {
 	}
 	discKey, err := decryptDiscKey(encrypted)
 	if err != nil {
-		slog.Debug("dvdcss: failed to decrypt disc key", "err", err)
-		return err
+		slog.Debug("dvdcss: no player key matched, falling back to cracking the disc key", "err", err)
+		discKey, err = crackDiscKey(Key(encrypted[:KeySize]))
+		if err != nil {
+			slog.Debug("dvdcss: failed to crack disc key", "err", err)
+			return err
+		}
 	}
 	dvd.agid, dvd.busKey, dvd.discKey, dvd.discKnown = agid, busKey, discKey, true
 	return nil

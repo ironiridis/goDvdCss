@@ -33,7 +33,7 @@ func decryptKey(invert byte, key Key, crypted Key) Key {
 		lfsr1hi = lfsr1lo >> 1
 		lfsr1lo = ((lfsr1lo & 1) << 8) ^ out1
 		out1 = uint32(cssTab4[byte(out1)])
-		out0 := (((((lfsr0>>8)^lfsr0)>>1)^lfsr0)>>3 ^ lfsr0) >> 7
+		out0 := uint32(byte((((((lfsr0>>8)^lfsr0)>>1)^lfsr0)>>3 ^ lfsr0) >> 7))
 		lfsr0 = lfsr0>>8 | out0<<24
 		combined += (out0 ^ uint32(invert)) + out1
 		stream[i] = byte(combined)
@@ -70,6 +70,106 @@ func decryptDiscKey(encrypted []byte) (Key, error) {
 	}
 	slog.Debug("dvdcss: no player key decrypted the disc key", "playerKeyCount", len(playerKeys))
 	return Key{}, errors.New("dvdcss: no player key decrypted the disc key")
+}
+
+const (
+	k1TableSize  = 65536
+	k1TableWidth = 10
+	bigTableSize = 16777216
+)
+
+// crackDiscKey brute forces the disc key from its encrypted hash without
+// needing a matching player key, mirroring upstream's CrackDiscKey.
+func crackDiscKey(hash Key) (Key, error) {
+	k1table := make([]byte, k1TableSize*k1TableWidth)
+	seed := uint32(hash[0]) ^ uint32(cssTab1[hash[1]])
+	for i := range uint32(256) {
+		b1 := uint32(cssTab1[byte(seed^i)])
+		for j := range uint32(256) {
+			c1 := j ^ b1 ^ i
+			idx := k1TableWidth * (256*j + c1)
+			count := k1table[idx] + 1
+			if count < k1TableWidth {
+				k1table[idx+uint32(count)] = byte(i)
+			}
+			k1table[idx] = count
+		}
+	}
+
+	bigTable := make([]uint32, bigTableSize)
+	var out2 Key
+	for i := range uint32(bigTableSize) {
+		state := ((i + i) & 0x1fffff0) | 0x8 | (i & 0x7)
+		for j := range out2 {
+			feedback := (((((state>>3)^state)>>1)^state)>>8 ^ state) >> 5 & 0xff
+			state = state<<8 | feedback
+			out2[j] = cssTab4[feedback]
+		}
+		bigTable[uint32(out2[0])<<16|uint32(out2[1])<<8|uint32(out2[4])] = i
+	}
+
+	for stepA := range uint32(k1TableSize) {
+		lfsr1a := 0x100 | (stepA >> 8)
+		lfsr1b := stepA & 0xff
+		var out1 Key
+		for i := range out1 {
+			t := uint32(cssTab2[byte(lfsr1b)]) ^ uint32(cssTab3[lfsr1a])
+			lfsr1b = lfsr1a >> 1
+			lfsr1a = ((lfsr1a & 1) << 8) ^ t
+			out1[i] = cssTab4[byte(t)]
+		}
+
+		var c Key
+		c[0], c[1] = byte(stepA>>8), byte(stepA)
+		tail := uint32(hash[3]) ^ uint32(cssTab1[hash[4]])
+		head := uint32(cssTab1[hash[0]])
+
+		for stepB := range uint32(256) {
+			var b, k Key
+			b[0] = byte(stepB)
+			k[0] = cssTab1[b[0]] ^ c[0]
+			b[4] = b[0] ^ k[0] ^ byte(head)
+			k[4] = b[4] ^ byte(tail)
+
+			idx := k1TableWidth * (256*uint32(b[0]) + uint32(c[1]))
+			possible := k1table[idx]
+
+			for try := uint32(0); try < uint32(possible); try++ {
+				k[1] = k1table[idx+try+1]
+				b[1] = byte(seed) ^ k[1]
+
+				tmp := uint32(0x100) + uint32(k[0]) - uint32(out1[0])
+				out2[0] = byte(tmp)
+				base := uint32(0xff)
+				if tmp&0x100 != 0 {
+					base = 0x100
+				}
+				out2[1] = byte(base + uint32(k[1]) - uint32(out1[1]))
+				out2[4] = byte(0x100 + uint32(k[4]) - uint32(out1[4]))
+
+				for attempt := range 2 {
+					if attempt == 1 {
+						out2[4] = byte(uint32(out2[4]) + 0xff)
+					}
+					entry := bigTable[uint32(out2[0])<<16|uint32(out2[1])<<8|uint32(out2[4])]
+					c[2], c[3], c[4] = byte(entry), byte(entry>>8), byte(entry>>16)
+					b[3] = cssTab1[b[4]] ^ k[4] ^ c[4]
+					k[3] = hash[2] ^ cssTab1[hash[3]] ^ b[3]
+					b[2] = cssTab1[b[3]] ^ k[3] ^ c[3]
+					k[2] = hash[1] ^ cssTab1[hash[2]] ^ b[2]
+
+					if b[1]^cssTab1[b[2]]^k[2] == c[2] {
+						if verify := decryptKey(0, c, hash); verify == c {
+							return c, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	slog.Debug("dvdcss: unable to crack disc key")
+	return Key{}, errors.New("dvdcss: unable to crack disc key")
 }
 
 // recoverTitleKey reconstructs a CSS title key from ten encrypted bytes and
