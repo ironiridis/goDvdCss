@@ -37,7 +37,7 @@ func cryptKey(keyType, variant int, challenge [10]byte) Key {
 	carry := byte(0)
 	for index > 0 {
 		value := byte(0)
-		for bit := 0; bit < 8; bit++ {
+		for bit := range 8 {
 			out0 := byte((lfsr0>>24 ^ lfsr0>>21 ^ lfsr0>>20 ^ lfsr0>>12) & 1)
 			lfsr0 = lfsr0<<1 | uint32(out0)
 			out1 := byte((lfsr1>>16 ^ lfsr1>>2) & 1)
@@ -129,7 +129,7 @@ func authenticate(fd uintptr) (int, Key, error) {
 		key1[i] = reportedKey[4-i]
 	}
 	variant := -1
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if cryptKey(0, i, challenge) == key1 {
 			variant = i
 			break

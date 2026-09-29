@@ -173,7 +173,7 @@ func (dvd *DVD) classifyBuffer(buffer []byte, blocks int) {
 	if dvd.scrambled != scrambleUnknown {
 		return
 	}
-	for i := 0; i < blocks; i++ {
+	for i := range blocks {
 		if buffer[i*BlockSize+0x14]&0x30 != 0 {
 			dvd.scrambled = scrambleEncrypted
 			return
@@ -210,7 +210,7 @@ func (dvd *DVD) Read(buffer []byte, blocks int, flags int) (int, error) {
 		}
 	}
 	if dvd.scrambled == scrambleEncrypted && flags&ReadDecrypt != 0 {
-		for i := 0; i < readBlocks; i++ {
+		for i := range readBlocks {
 			sector := buffer[i*BlockSize : (i+1)*BlockSize]
 			if err := unscramble(dvd.titleKey, sector); err != nil {
 				return i, err
@@ -234,7 +234,7 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 	const readLimit = 4718592
 	var sector [BlockSize]byte
 	encryptedSeen := false
-	for scanned := int64(0); scanned < readLimit; scanned++ {
+	for scanned := range int64(readLimit) {
 		block := start + int64(scanned)
 		if _, err := dvd.stream.Seek(block*BlockSize, io.SeekStart); err != nil {
 			return err

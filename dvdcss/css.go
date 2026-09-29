@@ -25,7 +25,7 @@ func decryptKey(invert byte, key Key, crypted Key) Key {
 	lfsr0 := (uint32(key[4])<<17 | uint32(key[3])<<9 | uint32(key[2])<<1) + 8 - uint32(key[2]&7)
 	lfsr0 = uint32(bitReverse(byte(lfsr0)))<<24 | uint32(bitReverse(byte(lfsr0>>8)))<<16 | uint32(bitReverse(byte(lfsr0>>16)))<<8 | uint32(bitReverse(byte(lfsr0>>24)))
 	combined := uint32(0)
-	for i := 0; i < KeySize; i++ {
+	for i := range KeySize {
 		out1 := uint32(cssTab2[byte(lfsr1hi)]) ^ uint32(cssTab3[lfsr1lo])
 		lfsr1hi = lfsr1lo >> 1
 		lfsr1lo = ((lfsr1lo & 1) << 8) ^ out1
@@ -81,7 +81,7 @@ func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int
 		t1, t2, t3, t5 := uint32(attempt>>8)|0x100, uint32(attempt&0xff), uint32(0), uint32(0)
 		var candidate uint32
 		valid := true
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			t4 := uint32(cssTab2[byte(t2)]) ^ uint32(cssTab3[t1])
 			t2, t1 = t1>>1, ((t1&1)<<8)^t4
 			t4 = uint32(cssTab5[byte(t4)])
@@ -115,10 +115,10 @@ func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int
 			continue
 		}
 		candidate = t3
-		for i := 0; i < 4; i++ {
+		for range 4 {
 			wanted := candidate & 0xff
 			candidate >>= 8
-			for input := uint32(0); input < 256; input++ {
+			for input := range uint32(256) {
 				state := (candidate & 0x1ffff) | input<<17
 				feedback := (((state >> 3) ^ state) >> 1) ^ state
 				feedback = (feedback >> 8) ^ state
@@ -129,7 +129,7 @@ func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int
 			}
 		}
 		base := (candidate >> 1) - 4
-		for offset := uint32(0); offset < 8; offset++ {
+		for offset := range uint32(8) {
 			state := base + offset
 			if (state*2 + 8 - (state & 7)) == candidate {
 				key := Key{byte(attempt >> 8), byte(attempt), byte(state), byte(state >> 8), byte(state >> 16)}
