@@ -106,10 +106,14 @@ func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int
 				t5 >>= 8
 				continue
 			}
+			if i == 4 {
+				candidate = t3
+			}
 			feedback := (((t3 >> 3) ^ t3) >> 1) ^ t3
 			feedback = (feedback >> 8) ^ t3
-			t3 = t3<<8 | feedback&0xff
-			t6 = uint32(cssTab4[byte(feedback>>5)])
+			t6 = (feedback >> 5) & 0xff
+			t3 = t3<<8 | t6
+			t6 = uint32(cssTab4[byte(t6)])
 			t5 += t6 + t4
 			if byte(t5) != buffer[i] {
 				valid = false
@@ -120,7 +124,6 @@ func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int
 		if !valid {
 			continue
 		}
-		candidate = t3
 		for range 4 {
 			wanted := candidate & 0xff
 			candidate >>= 8
@@ -128,7 +131,7 @@ func recoverTitleKey(start int, crypted, decrypted, sectorSeed []byte) (Key, int
 				state := (candidate & 0x1ffff) | input<<17
 				feedback := (((state >> 3) ^ state) >> 1) ^ state
 				feedback = (feedback >> 8) ^ state
-				if feedback&0xff == wanted {
+				if (feedback>>5)&0xff == wanted {
 					candidate = state
 					break
 				}
