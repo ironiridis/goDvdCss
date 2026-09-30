@@ -25,6 +25,16 @@ func linuxDVDIOCTL(fd uintptr, request uintptr, data unsafe.Pointer) error {
 	return errIOCTLUnimplemented
 }
 
+func ejectTray(fd uintptr) error {
+	slog.Debug("dvdcss: ejectTray unimplemented on this platform")
+	return errIOCTLUnimplemented
+}
+
+func closeTray(fd uintptr) error {
+	slog.Debug("dvdcss: closeTray unimplemented on this platform")
+	return errIOCTLUnimplemented
+}
+
 func readCopyright(fd uintptr, layer int) (int, error) {
 	slog.Debug("dvdcss: readCopyright unimplemented on this platform", "layer", layer)
 	return 0, errIOCTLUnimplemented

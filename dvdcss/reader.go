@@ -24,6 +24,7 @@ type DVD struct {
 	discKnown  bool
 	titleKey   Key
 	titleKnown bool
+	titleKeys  map[int64]Key
 	scrambled  scrambleState
 }
 
@@ -58,6 +59,27 @@ func (dvd *DVD) SetFd(fd uintptr) error {
 	}
 	dvd.fd = &fd
 	dvd.detectScrambled()
+	return nil
+}
+
+// Eject opens the DVD tray. When retract is true, it then closes the tray.
+func (dvd *DVD) Eject(retract bool) error {
+	if dvd.fd == nil {
+		err := fmt.Errorf("dvdcss: file descriptor is not set")
+		slog.Debug("dvdcss: cannot control tray without a file descriptor", "err", err)
+		return err
+	}
+	if !retract {
+		if err := ejectTray(*dvd.fd); err != nil {
+			slog.Debug("dvdcss: failed to eject tray", "err", err)
+			return err
+		}
+	} else {
+		if err := closeTray(*dvd.fd); err != nil {
+			slog.Debug("dvdcss: failed to retract tray", "err", err)
+			return err
+		}
+	}
 	return nil
 }
 
@@ -100,8 +122,11 @@ func (dvd *DVD) Seek(block int64, flags int) (int64, error) {
 }
 
 func (dvd *DVD) tryTitleKey(block int64) bool {
-	if dvd.fd == nil || dvd.titleKnown {
-		return dvd.titleKnown
+	if dvd.useTitleKey(block) {
+		return true
+	}
+	if dvd.fd == nil {
+		return false
 	}
 	if !dvd.discKnown {
 		if err := dvd.loadDiscKey(); err != nil {
@@ -121,21 +146,43 @@ func (dvd *DVD) tryTitleKey(block int64) bool {
 		return false
 	}
 	asf, err := reportASF(*dvd.fd)
-	if err != nil || asf != 1 {
-		slog.Debug("dvdcss: authentication success flag check failed while fetching title key", "block", block, "asf", asf, "err", err)
+	if err != nil {
+		slog.Debug("dvdcss: failed to report authentication success flag while fetching title key", "block", block, "err", err)
 		_ = invalidateAGID(*dvd.fd, dvd.agid)
 		return false
+	}
+	if asf == 0 {
+		slog.Debug("dvdcss: authentication success flag cleared while fetching title key", "block", block)
 	}
 	for i := range key {
 		key[i] ^= dvd.busKey[4-i]
 	}
 	if key.IsZero() {
-		slog.Debug("dvdcss: title key is zero", "block", block)
+		slog.Debug("dvdcss: title is not encrypted", "block", block)
+		dvd.rememberTitleKey(block, key)
+		return true
+	}
+	dvd.rememberTitleKey(block, decryptTitleKey(dvd.discKey, key))
+	return true
+}
+
+func (dvd *DVD) useTitleKey(block int64) bool {
+	key, ok := dvd.titleKeys[block]
+	if !ok {
 		return false
 	}
-	dvd.titleKey = decryptTitleKey(dvd.discKey, key)
+	dvd.titleKey = key
 	dvd.titleKnown = true
 	return true
+}
+
+func (dvd *DVD) rememberTitleKey(block int64, key Key) {
+	if dvd.titleKeys == nil {
+		dvd.titleKeys = make(map[int64]Key)
+	}
+	dvd.titleKeys[block] = key
+	dvd.titleKey = key
+	dvd.titleKnown = true
 }
 
 func (dvd *DVD) ensureTitleKeyForRead() error {
@@ -257,7 +304,7 @@ func (dvd *DVD) Read(buffer []byte, blocks int, flags int) (int, error) {
 }
 
 func (dvd *DVD) ensureTitleKey(start int64) error {
-	if dvd.titleKnown {
+	if dvd.useTitleKey(start) {
 		return nil
 	}
 	original := dvd.position
@@ -292,8 +339,7 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 		if sector[0x14]&0x30 != 0 && sector[0x11] != 0xbb && sector[0x11] != 0xbe && sector[0x11] != 0xbf {
 			encryptedSeen = true
 			if key, ok := attackPattern(sector[:]); ok {
-				dvd.titleKey = key
-				dvd.titleKnown = true
+				dvd.rememberTitleKey(start, key)
 				return nil
 			}
 		}
@@ -307,7 +353,7 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 		slog.Debug("dvdcss: unable to recover title key", "start", start)
 		return fmt.Errorf("dvdcss: unable to recover title key")
 	}
-	dvd.titleKnown = true
+	dvd.rememberTitleKey(start, Key{})
 	return nil
 }
 

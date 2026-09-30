@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	dvdReadStruct = 0x5390
-	dvdAuth       = 0x5392
+	dvdReadStruct  = 0x5390
+	dvdAuth        = 0x5392
+	cdromEject     = 0x5309
+	cdromCloseTray = 0x5319
 
 	dvdStructCopyright = 1
 	dvdStructDiscKey   = 2
@@ -33,6 +35,14 @@ func linuxDVDIOCTL(fd uintptr, request uintptr, data unsafe.Pointer) error {
 		return errno
 	}
 	return nil
+}
+
+func ejectTray(fd uintptr) error {
+	return linuxDVDIOCTL(fd, cdromEject, nil)
+}
+
+func closeTray(fd uintptr) error {
+	return linuxDVDIOCTL(fd, cdromCloseTray, nil)
 }
 
 func readCopyright(fd uintptr, layer int) (int, error) {
