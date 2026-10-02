@@ -62,7 +62,7 @@ func (dvd *DVD) SetFd(fd uintptr) error {
 	return nil
 }
 
-// Eject opens the DVD tray. When retract is true, it then closes the tray.
+// Eject opens the DVD tray when retract is false and closes it when true.
 func (dvd *DVD) Eject(retract bool) error {
 	if dvd.fd == nil {
 		err := fmt.Errorf("dvdcss: file descriptor is not set")
@@ -326,12 +326,10 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 			slog.Debug("dvdcss: seek failed while recovering title key", "block", block, "err", err)
 			return err
 		}
-		if _, err := io.ReadFull(dvd.stream, sector[:]); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				break
-			}
-			slog.Debug("dvdcss: read failed while recovering title key", "block", block, "err", err)
-			return err
+		n, err := dvd.stream.Read(sector[:])
+		if n < BlockSize {
+			slog.Debug("dvdcss: read did not return full sector while recovering title key", "block", block, "read", n, "err", err)
+			break
 		}
 		if sector[0] != 0 || sector[1] != 0 || sector[2] != 1 {
 			break

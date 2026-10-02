@@ -1,6 +1,23 @@
 package dvdcss
 
-import "testing"
+import (
+	"io"
+	"testing"
+)
+
+type shortReadSeeker struct {
+	n     int
+	reads int
+}
+
+func (stream *shortReadSeeker) Read(buffer []byte) (int, error) {
+	stream.reads++
+	return stream.n, nil
+}
+
+func (stream *shortReadSeeker) Seek(_ int64, _ int) (int64, error) {
+	return 0, nil
+}
 
 func TestEjectRequiresFileDescriptor(t *testing.T) {
 	dvd := New(nil)
@@ -26,3 +43,31 @@ func TestTitleKeyCacheSelectsByBlock(t *testing.T) {
 		t.Fatal("uncached block unexpectedly has a title key")
 	}
 }
+
+func TestEnsureTitleKeyStopsOnIncompleteSector(t *testing.T) {
+	tests := []struct {
+		name     string
+		readSize int
+	}{
+		{name: "zero bytes", readSize: 0},
+		{name: "partial sector", readSize: BlockSize - 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stream := &shortReadSeeker{n: test.readSize}
+			dvd := New(stream)
+
+			if err := dvd.ensureTitleKey(0); err != nil {
+				t.Fatalf("ensureTitleKey returned %v", err)
+			}
+			if stream.reads != 1 {
+				t.Fatalf("Read called %d times, want 1", stream.reads)
+			}
+			if !dvd.titleKnown || dvd.titleKey != (Key{}) {
+				t.Fatalf("title key state = known:%t key:%v, want known zero key", dvd.titleKnown, dvd.titleKey)
+			}
+		})
+	}
+}
+
+var _ io.ReadSeeker = (*shortReadSeeker)(nil)
