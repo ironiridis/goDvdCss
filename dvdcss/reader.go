@@ -15,17 +15,19 @@ const (
 )
 
 type DVD struct {
-	fd         *uintptr
-	stream     io.ReadSeeker
-	position   int64
-	agid       int
-	busKey     Key
-	discKey    Key
-	discKnown  bool
-	titleKey   Key
-	titleKnown bool
-	titleKeys  map[int64]Key
-	scrambled  scrambleState
+	fd          *uintptr
+	stream      io.ReadSeeker
+	position    int64
+	agid        int
+	busKey      Key
+	discKey     Key
+	discKnown   bool
+	titleKey    Key
+	titleKnown  bool
+	titleKeys   map[int64]Key
+	sectorCount int64
+	sizeErr     error
+	scrambled   scrambleState
 }
 
 type scrambleState uint8
@@ -44,12 +46,37 @@ func Open(path string) (*DVD, error) {
 	}
 	fd := file.Fd()
 	dvd := &DVD{fd: &fd, stream: file, scrambled: scrambleUnknown}
+	if err := dvd.initializeSectorCount(); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
 	dvd.detectScrambled()
 	return dvd, nil
 }
 
 func New(stream io.ReadSeeker) *DVD {
-	return &DVD{stream: stream, scrambled: scrambleUnknown}
+	dvd := &DVD{stream: stream, scrambled: scrambleUnknown}
+	dvd.sizeErr = dvd.initializeSectorCount()
+	return dvd
+}
+
+func (dvd *DVD) initializeSectorCount() error {
+	if dvd.stream == nil {
+		return fmt.Errorf("dvdcss: source stream is nil")
+	}
+	position, err := dvd.stream.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("dvdcss: get source position: %w", err)
+	}
+	size, err := dvd.stream.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("dvdcss: get source size: %w", err)
+	}
+	if _, err := dvd.stream.Seek(position, io.SeekStart); err != nil {
+		return fmt.Errorf("dvdcss: restore source position: %w", err)
+	}
+	dvd.sectorCount = size / BlockSize
+	return nil
 }
 
 func (dvd *DVD) SetFd(fd uintptr) error {
@@ -307,21 +334,22 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 	if dvd.useTitleKey(start) {
 		return nil
 	}
+	if dvd.sizeErr != nil {
+		return dvd.sizeErr
+	}
 	original := dvd.position
 	defer func() {
 		_, _ = dvd.stream.Seek(original*BlockSize, io.SeekStart)
 		dvd.position = original
 	}()
 
-	const readLimit = 4718592
 	// upstream gives up early on unscrambled titles rather than scanning
-	// the full readLimit range looking for a key that will never appear.
+	// the remainder of the source looking for a key that will never appear.
 	const noEncryptedLimit = 2000
 	var sector [BlockSize]byte
 	encryptedSeen := false
 	reads := int64(0)
-	for reads < readLimit {
-		block := start + reads
+	for block := start; block < dvd.sectorCount; block++ {
 		if _, err := dvd.stream.Seek(block*BlockSize, io.SeekStart); err != nil {
 			slog.Debug("dvdcss: seek failed while recovering title key", "block", block, "err", err)
 			return err
@@ -342,6 +370,9 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 			}
 		}
 		reads++
+		if reads%0x1000 == 0 {
+			slog.Warn("dvdcss: still recovering title key", "block", block, "scanned", reads)
+		}
 		if reads >= noEncryptedLimit && !encryptedSeen {
 			slog.Debug("dvdcss: no scrambled sectors found while cracking title key", "start", start, "scanned", reads)
 			break

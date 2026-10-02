@@ -1,13 +1,15 @@
 package dvdcss
 
 import (
+	"bytes"
 	"io"
 	"testing"
 )
 
 type shortReadSeeker struct {
-	n     int
-	reads int
+	n        int
+	position int64
+	reads    int
 }
 
 func (stream *shortReadSeeker) Read(buffer []byte) (int, error) {
@@ -15,8 +17,26 @@ func (stream *shortReadSeeker) Read(buffer []byte) (int, error) {
 	return stream.n, nil
 }
 
-func (stream *shortReadSeeker) Seek(_ int64, _ int) (int64, error) {
-	return 0, nil
+func (stream *shortReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+		stream.position = offset
+	case io.SeekCurrent:
+		stream.position += offset
+	case io.SeekEnd:
+		stream.position = BlockSize + offset
+	}
+	return stream.position, nil
+}
+
+type countingReadSeeker struct {
+	*bytes.Reader
+	reads int
+}
+
+func (stream *countingReadSeeker) Read(buffer []byte) (int, error) {
+	stream.reads++
+	return stream.Reader.Read(buffer)
 }
 
 func TestEjectRequiresFileDescriptor(t *testing.T) {
@@ -67,6 +87,52 @@ func TestEnsureTitleKeyStopsOnIncompleteSector(t *testing.T) {
 				t.Fatalf("title key state = known:%t key:%v, want known zero key", dvd.titleKnown, dvd.titleKey)
 			}
 		})
+	}
+}
+
+func TestNewRecordsCompleteSectorCountAndPreservesPosition(t *testing.T) {
+	stream := bytes.NewReader(make([]byte, 2*BlockSize+1))
+	if _, err := stream.Seek(BlockSize, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	dvd := New(stream)
+	if dvd.sizeErr != nil {
+		t.Fatalf("New recorded source size error: %v", dvd.sizeErr)
+	}
+	if dvd.sectorCount != 2 {
+		t.Fatalf("sector count = %d, want 2", dvd.sectorCount)
+	}
+	position, err := stream.Seek(0, io.SeekCurrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position != BlockSize {
+		t.Fatalf("stream position = %d, want %d", position, BlockSize)
+	}
+}
+
+func TestEnsureTitleKeyStopsAtSourceEnd(t *testing.T) {
+	data := make([]byte, 2*BlockSize)
+	for block := range 2 {
+		sector := data[block*BlockSize : (block+1)*BlockSize]
+		sector[2] = 1
+		for index := 3; index < 0x80; index++ {
+			sector[index] = byte(index)
+		}
+		sector[0x14] = 0x20
+	}
+	if _, ok := attackPattern(data[:BlockSize]); ok {
+		t.Fatal("test sector unexpectedly has a recoverable title key pattern")
+	}
+
+	stream := &countingReadSeeker{Reader: bytes.NewReader(data)}
+	dvd := New(stream)
+	if err := dvd.ensureTitleKey(0); err == nil {
+		t.Fatal("ensureTitleKey succeeded without a recoverable key")
+	}
+	if stream.reads != 2 {
+		t.Fatalf("Read called %d times, want 2", stream.reads)
 	}
 }
 
