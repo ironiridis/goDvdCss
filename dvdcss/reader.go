@@ -370,8 +370,8 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 			}
 		}
 		reads++
-		if reads%0x1000 == 0 {
-			slog.Warn("dvdcss: still recovering title key", "block", block, "scanned", reads)
+		if reads%0x8000 == 0 {
+			slog.Info("dvdcss: still recovering title key", "block", block, "scanned", reads)
 		}
 		if reads >= noEncryptedLimit && !encryptedSeen {
 			slog.Debug("dvdcss: no scrambled sectors found while cracking title key", "start", start, "scanned", reads)
@@ -379,7 +379,7 @@ func (dvd *DVD) ensureTitleKey(start int64) error {
 		}
 	}
 	if encryptedSeen {
-		slog.Debug("dvdcss: unable to recover title key", "start", start)
+		slog.Warn("dvdcss: unable to recover title key", "start", start)
 		return fmt.Errorf("dvdcss: unable to recover title key")
 	}
 	dvd.rememberTitleKey(start, Key{})

@@ -108,7 +108,7 @@ func authenticate(fd uintptr) (int, Key, error) {
 		agid, err = reportAgid(fd, agid)
 	}
 	if err != nil {
-		slog.Debug("dvdcss: authentication failed to acquire AGID", "err", err)
+		slog.Warn("dvdcss: authentication failed to acquire AGID", "err", err)
 		return 0, Key{}, errAuthentication
 	}
 	var challenge [10]byte
@@ -120,13 +120,13 @@ func authenticate(fd uintptr) (int, Key, error) {
 		reversed[9-i] = challenge[i]
 	}
 	if err = sendChallenge(fd, agid, reversed); err != nil {
-		slog.Debug("dvdcss: failed to send challenge", "agid", agid, "err", err)
+		slog.Warn("dvdcss: failed to send challenge", "agid", agid, "err", err)
 		_ = invalidateAGID(fd, agid)
 		return 0, Key{}, errAuthentication
 	}
 	reportedKey, err := reportKey1(fd, agid)
 	if err != nil {
-		slog.Debug("dvdcss: failed to report key1", "agid", agid, "err", err)
+		slog.Warn("dvdcss: failed to report key1", "agid", agid, "err", err)
 		_ = invalidateAGID(fd, agid)
 		return 0, Key{}, errAuthentication
 	}
@@ -142,13 +142,13 @@ func authenticate(fd uintptr) (int, Key, error) {
 		}
 	}
 	if variant < 0 {
-		slog.Debug("dvdcss: failed to determine key variant", "agid", agid)
+		slog.Warn("dvdcss: failed to determine key variant", "agid", agid)
 		_ = invalidateAGID(fd, agid)
 		return 0, Key{}, errAuthentication
 	}
 	reportedChallenge, err := reportChallenge(fd, agid)
 	if err != nil {
-		slog.Debug("dvdcss: failed to report challenge", "agid", agid, "err", err)
+		slog.Warn("dvdcss: failed to report challenge", "agid", agid, "err", err)
 		_ = invalidateAGID(fd, agid)
 		return 0, Key{}, errAuthentication
 	}
@@ -161,7 +161,7 @@ func authenticate(fd uintptr) (int, Key, error) {
 		sentKey2[4-i] = key2[i]
 	}
 	if err = sendKey2(fd, agid, sentKey2); err != nil {
-		slog.Debug("dvdcss: failed to send key2", "agid", agid, "err", err)
+		slog.Warn("dvdcss: failed to send key2", "agid", agid, "err", err)
 		_ = invalidateAGID(fd, agid)
 		return 0, Key{}, errAuthentication
 	}
@@ -176,22 +176,22 @@ func (dvd *DVD) loadDiscKey() error {
 		return nil
 	}
 	if dvd.fd == nil {
-		slog.Debug("dvdcss: cannot load disc key without an open file descriptor")
+		slog.Warn("dvdcss: cannot load disc key without an open file descriptor")
 		return errAuthentication
 	}
 	agid, busKey, err := authenticate(*dvd.fd)
 	if err != nil {
-		slog.Debug("dvdcss: authentication failed while loading disc key", "err", err)
+		slog.Warn("dvdcss: authentication failed while loading disc key", "err", err)
 		return err
 	}
 	encrypted, err := readDiscKey(*dvd.fd, agid)
 	if err != nil {
-		slog.Debug("dvdcss: failed to read disc key", "agid", agid, "err", err)
+		slog.Warn("dvdcss: failed to read disc key", "agid", agid, "err", err)
 		return err
 	}
 	asf, err := reportASF(*dvd.fd)
 	if err != nil || asf != 1 {
-		slog.Debug("dvdcss: authentication success flag check failed", "asf", asf, "err", err)
+		slog.Warn("dvdcss: authentication success flag check failed", "asf", asf, "err", err)
 		_ = invalidateAGID(*dvd.fd, agid)
 		return errAuthentication
 	}
@@ -200,10 +200,10 @@ func (dvd *DVD) loadDiscKey() error {
 	}
 	discKey, err := decryptDiscKey(encrypted)
 	if err != nil {
-		slog.Debug("dvdcss: no player key matched, falling back to cracking the disc key", "err", err)
+		slog.Info("dvdcss: no player key matched, falling back to cracking the disc key", "err", err)
 		discKey, err = crackDiscKey(Key(encrypted[:KeySize]))
 		if err != nil {
-			slog.Debug("dvdcss: failed to crack disc key", "err", err)
+			slog.Warn("dvdcss: failed to crack disc key", "err", err)
 			return err
 		}
 	}
